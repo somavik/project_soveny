@@ -1,0 +1,10 @@
+datasets/
+debug_outputs/
+output/
+output_aorta/
+plots/
+*.nii
+*.nii.gz
+*.nrrd
+__pycache__/
+.ipynb_checkpoints/
