@@ -111,12 +111,13 @@ def calculate_c(image: np.ndarray, sigmas: list) -> float:
         if current_max > global_max_S:
             global_max_S = current_max
 
-    c = global_max_S / 2
+    c = global_max_S / 1.5
     c = max(c, 1e-6)
     return c
 
 def evaluate_tubeness_on_skeleton(l1: np.ndarray, l2: np.ndarray, l3: np.ndarray, alpha: float, beta: float, c: float) -> np.ndarray:
     eps = 1e-10
+        
     abs_l1, abs_l2, abs_l3 = np.abs(l1), np.abs(l2), np.abs(l3)
 
     R_plate = abs_l2 / (abs_l3 + eps)
@@ -126,7 +127,7 @@ def evaluate_tubeness_on_skeleton(l1: np.ndarray, l2: np.ndarray, l3: np.ndarray
     scores = (1 - np.exp(-(R_plate**2) / (2 * alpha**2))) * \
              np.exp(-(R_blob**2) / (2 * beta**2)) * \
              (1 - np.exp(-(S**2) / (2 * c**2)))
-    scores[l3 > 0] = 0
+    scores[(l3 > -0.2) | (l2 > -0.1)] = 0 #
             
     return np.nan_to_num(scores)
 
@@ -179,7 +180,7 @@ def multiscale_sheetness_3d(image: np.ndarray, sigmas: list, alpha=0.5, beta=0.5
     print("\nSzűrés kész! Maximális válaszok kigyűjtve.")
     return max_scores
 
-def multiscale_tubeness_3d(image: np.ndarray, skeleton: np.ndarray, sigmas: list, alpha=0.5, beta=0.5, c=None) -> dict:
+def multiscale_tubeness_3d(image: np.ndarray, skeleton: np.ndarray, sigmas: list, alpha=0.5, beta=0.1, c=None) -> dict:
     """
     Többskálás szűrés (tubeness) a skeleton pontjain.
     """
@@ -189,6 +190,7 @@ def multiscale_tubeness_3d(image: np.ndarray, skeleton: np.ndarray, sigmas: list
 
     max_scores = np.zeros_like(image, dtype=np.float32)
     best_eigenvectors = np.zeros(image.shape + (3,), dtype=np.float32)
+    best_eigenvalues = np.zeros(image.shape + (3,), dtype=np.float32)
 
     coords = np.nonzero(skeleton)
     sz, sy, sx = coords
@@ -227,13 +229,18 @@ def multiscale_tubeness_3d(image: np.ndarray, skeleton: np.ndarray, sigmas: list
         u1_full[sz, sy, sx, :] = u1_current
         u1_current = u1_full
 
+        l_full = np.zeros(image.shape + (3,), dtype=np.float32)
+        l_full[sz, sy, sx, :] = np.stack([l1, l2, l3], axis=-1)
+
         # Frissítjük a maximumokat
         better_mask = scores > max_scores
         max_scores[better_mask] = scores[better_mask]
         best_eigenvectors[better_mask] = u1_current[better_mask]
+        best_eigenvalues[better_mask] = l_full[better_mask]
 
     print("\nSzűrés kész! Maximális válaszok kigyűjtve.")
     return {
         'scores': max_scores,
-        'eigenvectors': best_eigenvectors
+        'eigenvectors': best_eigenvectors,
+        'eigenvalues': best_eigenvalues
     }

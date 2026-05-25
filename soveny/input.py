@@ -33,29 +33,12 @@ def get_input_paths(dataset_dir: str) -> Tuple[str, str]:
     root.destroy()
     return image_path, label_path
 
-def derive_output_path(selected_image_path: str) -> str:
-    """Generate output output path from selected inputs."""
-    selected = Path(selected_image_path)
-    file_name = selected.name
-    print(f"Selected file: {file_name}")
-
-    if file_name.endswith('.nii.gz'):
-        base_name = file_name[:-7]
-        extension = '.nii.gz'
-    else:
-        base_name = selected.stem
-        extension = selected.suffix
-
-    if base_name.endswith('_image'):
-        base_name = base_name[:-6]
-
-    output_name = f'{base_name}_filtered{extension}'
-    return str(selected.with_name(output_name))
-
 def load_ct_and_label(image_path: str, label_path: str) -> Tuple[sitk.Image, np.ndarray, sitk.Image, np.ndarray]:
     """Read the CT image and label data as SimpleITK objects and numpy arrays."""
     ct_image: sitk.Image = sitk.ReadImage(image_path)
     ct_array: np.ndarray = sitk.GetArrayFromImage(ct_image)
+    
+    print(f"Eredeti CT spacing (X, Y, Z): {ct_image.GetSpacing()}")
 
     label_image: sitk.Image = sitk.ReadImage(label_path)
     label_array: np.ndarray = sitk.GetArrayFromImage(label_image)
