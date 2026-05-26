@@ -3,7 +3,7 @@ from typing import Tuple, Dict
 
 def extract_labels(label_array: np.ndarray, config: dict) -> Dict[str, np.ndarray]:
     labels = np.unique(label_array)
-    print(f"Azonosított címkék: {labels}")
+    #print(f"Azonosított címkék: {labels}")
 
     left_ventricle_label: np.ndarray = (label_array == config['labels']['left_ventricle'])
     right_ventricle_label: np.ndarray = (label_array == config['labels']['right_ventricle'])

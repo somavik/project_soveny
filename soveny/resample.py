@@ -39,19 +39,19 @@ def resample_to_isotropic(ct_image: sitk.Image, label_image: sitk.Image, ct_orde
     # 2. Kiszámoljuk a nagyítási/kicsinyítési arányokat tengelyenként
     # Ha pl. Z-ben 0.75 volt és 1.0-ra megyünk, akkor a zoom faktor 0.75 (zsugorítjuk a mátrixot)
     zoom_factors = [orig / targ for orig, targ in zip(original_spacing_zyx, target_spacing_zyx)]
-    print(f"Numpy Zoom faktorok (Z, Y, X): {zoom_factors}")
+    #print(f"Numpy Zoom faktorok (Z, Y, X): {zoom_factors}")
 
     # 3. CT átmintavételezése LINEÁRIS interpolációval (order=1)
-    print("CT átmintavételezése folyamatban...")
+    #print("CT átmintavételezése folyamatban...")
     resampled_ct_array = ndimage.zoom(reoriented_ct_array, zoom=zoom_factors, order=3)
 
     # 4. Maszk (Label) átmintavételezése NEAREST NEIGHBOR interpolációval (order=0)
     # Ez KRITIKUS, mert a címkék diszkrét értékek (0, 1, 2). Ha ide lineárisat tennél,
     # a határvonalakon 0.5 meg 1.3 értékű "címkék" keletkeznének, ami tönkretenné a maszkot!
-    print("Címkék átmintavételezése folyamatban...")
+    #print("Címkék átmintavételezése folyamatban...")
     resampled_label_array = ndimage.zoom(reoriented_label_array, zoom=zoom_factors, order=0)
 
-    print(f"Új izotróp CT shape: {resampled_ct_array.shape}")
+    #print(f"Új izotróp CT shape: {resampled_ct_array.shape}")
 
 
     # 5. Eredmény ellenőrzése

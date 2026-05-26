@@ -47,5 +47,5 @@ def save_image(array, output_path) -> sitk.Image:
     
     # Mentés
     sitk.WriteImage(new_image, output_path)
-    print(f"Sikeres mentés: {output_path}")
+    #print(f"Sikeres mentés: {output_path}")
     return new_image

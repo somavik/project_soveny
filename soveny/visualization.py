@@ -154,7 +154,10 @@ def plot_3d_slices_with_labels(ct_array: np.ndarray, labels: Union[np.ndarray, D
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     
     max_label = int(np.max(label_array)) if np.max(label_array) > 0 else 1
-    cmap = plt.get_cmap('tab10', max_label)
+    
+    # Kifejezetten élénk, vibráló színek listája (szürke kizárva), hogy jól látszódjon az ér
+    bright_colors = ['red', 'lime', 'blue', 'orange', 'fuchsia', 'cyan', 'yellow', 'purple', 'green', 'magenta']
+    cmap = mcolors.ListedColormap(bright_colors[:max_label])
     
     for i, (title, idx, ct_slice, label_slice) in enumerate(slices):
         # 1. Nyers CT
@@ -171,7 +174,7 @@ def plot_3d_slices_with_labels(ct_array: np.ndarray, labels: Union[np.ndarray, D
 
     # Ha dict volt (nevekkel), kirakunk egy legendet
     if isinstance(labels, dict) and label_names:
-        patches = [mpatches.Patch(color=cmap(i / max_label), label=name) for i, name in enumerate(label_names)]
+        patches = [mpatches.Patch(color=bright_colors[idx], label=name) for idx, name in enumerate(label_names)]
         fig.legend(handles=patches, loc='center right', bbox_to_anchor=(0.98, 0.5))
 
     # Térköz a legendnek

@@ -59,7 +59,7 @@ def calculate_c_in_skeleton(binary: np.ndarray, skeleton: np.ndarray, sigmas: li
     global_max_S = 0
     skeleton_coords = np.nonzero(skeleton)
     for s in sigmas:
-        print("Mátrix építés és sajátérték-számítás...")
+        #print("Mátrix építés és sajátérték-számítás...")
         
         H_skel = compute_hessian_at_coords(binary, skeleton_coords, s)
         eigvals = np.linalg.eigvalsh(H_skel)
@@ -74,7 +74,7 @@ def calculate_c_in_skeleton(binary: np.ndarray, skeleton: np.ndarray, sigmas: li
         else:
             current_max = 0.0
         
-        print(f"Skála: {s}, 99%-os percentilis S: {current_max}")
+        #print(f"Skála: {s}, 99%-os percentilis S: {current_max}")
             
         if current_max > global_max_S:
             global_max_S = current_max
@@ -91,7 +91,7 @@ def calculate_c(image: np.ndarray, sigmas: list) -> float:
     """
     global_max_S = 0
     for s in sigmas:
-        print("Mátrix építés és sajátérték-számítás full image-re...")
+        #print("Mátrix építés és sajátérték-számítás full image-re...")
         
         H = compute_hessian_full(image, s)
         eigvals = np.linalg.eigvalsh(H)
@@ -106,7 +106,7 @@ def calculate_c(image: np.ndarray, sigmas: list) -> float:
         else:
             current_max = 0.0
         
-        print(f"Skála: {s}, 99%-os percentilis S: {current_max}")
+        #print(f"Skála: {s}, 99%-os percentilis S: {current_max}")
             
         if current_max > global_max_S:
             global_max_S = current_max
@@ -127,7 +127,7 @@ def evaluate_tubeness_on_skeleton(l1: np.ndarray, l2: np.ndarray, l3: np.ndarray
     scores = (1 - np.exp(-(R_plate**2) / (2 * alpha**2))) * \
              np.exp(-(R_blob**2) / (2 * beta**2)) * \
              (1 - np.exp(-(S**2) / (2 * c**2)))
-    scores[(l3 > -0.2) | (l2 > -0.1)] = 0 #
+    #scores[(l3 > -0.2) | (l2 > -0.1)] = 0 #
             
     return np.nan_to_num(scores)
 
@@ -152,12 +152,12 @@ def multiscale_sheetness_3d(image: np.ndarray, sigmas: list, alpha=0.5, beta=0.5
     """
     if c is None:
         c = calculate_c(image, sigmas)
-        print(f"Használt c érték a sheetness képlethez: {c}")
+        #print(f"Használt c érték a sheetness képlethez: {c}")
 
     max_scores = np.zeros_like(image, dtype=np.float32)
 
     for s in sigmas:
-        print(f" -> Számítás sigma = {s} skálán (sheetness)...")
+        #print(f" -> Számítás sigma = {s} skálán (sheetness)...")
         
         H = compute_hessian_full(image, s)
 
@@ -177,7 +177,7 @@ def multiscale_sheetness_3d(image: np.ndarray, sigmas: list, alpha=0.5, beta=0.5
         better_mask = scores > max_scores
         max_scores[better_mask] = scores[better_mask]
 
-    print("\nSzűrés kész! Maximális válaszok kigyűjtve.")
+    #print("\nSzűrés kész! Maximális válaszok kigyűjtve.")
     return max_scores
 
 def multiscale_tubeness_3d(image: np.ndarray, skeleton: np.ndarray, sigmas: list, alpha=0.5, beta=0.1, c=None) -> dict:
@@ -186,7 +186,7 @@ def multiscale_tubeness_3d(image: np.ndarray, skeleton: np.ndarray, sigmas: list
     """
     if c is None:
         c = calculate_c_in_skeleton(image, skeleton, sigmas)
-        print(f"Használt c érték a tubeness képlethez: {c}")
+        #print(f"Használt c érték a tubeness képlethez: {c}")
 
     max_scores = np.zeros_like(image, dtype=np.float32)
     best_eigenvectors = np.zeros(image.shape + (3,), dtype=np.float32)
@@ -195,10 +195,10 @@ def multiscale_tubeness_3d(image: np.ndarray, skeleton: np.ndarray, sigmas: list
     coords = np.nonzero(skeleton)
     sz, sy, sx = coords
     num_points = len(sz)
-    print(f"Összesen {num_points} darab skeleton pontot vizsgálunk.")
+    #print(f"Összesen {num_points} darab skeleton pontot vizsgálunk.")
 
     for s in sigmas:
-        print(f" -> Számítás sigma = {s} skálán (tubeness)...")
+        #print(f" -> Számítás sigma = {s} skálán (tubeness)...")
         
         H = compute_hessian_at_coords(image, coords, s)
 
@@ -238,7 +238,7 @@ def multiscale_tubeness_3d(image: np.ndarray, skeleton: np.ndarray, sigmas: list
         best_eigenvectors[better_mask] = u1_current[better_mask]
         best_eigenvalues[better_mask] = l_full[better_mask]
 
-    print("\nSzűrés kész! Maximális válaszok kigyűjtve.")
+    #print("\nSzűrés kész! Maximális válaszok kigyűjtve.")
     return {
         'scores': max_scores,
         'eigenvectors': best_eigenvectors,

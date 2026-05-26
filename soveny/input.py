@@ -38,13 +38,13 @@ def load_ct_and_label(image_path: str, label_path: str) -> Tuple[sitk.Image, np.
     ct_image: sitk.Image = sitk.ReadImage(image_path)
     ct_array: np.ndarray = sitk.GetArrayFromImage(ct_image)
     
-    print(f"Eredeti CT spacing (X, Y, Z): {ct_image.GetSpacing()}")
+    #print(f"Eredeti CT spacing (X, Y, Z): {ct_image.GetSpacing()}")
 
     label_image: sitk.Image = sitk.ReadImage(label_path)
     label_array: np.ndarray = sitk.GetArrayFromImage(label_image)
 
-    print(f"Image neve: {os.path.basename(image_path)}")
-    print(f"Label neve: {os.path.basename(label_path)}")
+    #print(f"Image neve: {os.path.basename(image_path)}")
+    #print(f"Label neve: {os.path.basename(label_path)}")
 
     return ct_image, ct_array, label_image, label_array
 
