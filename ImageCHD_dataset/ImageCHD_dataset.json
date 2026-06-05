@@ -1,0 +1,8 @@
+{
+  "labels": {
+    "left_ventricle": 1,
+    "right_ventricle": 2,
+    "aorta": 6,
+    "artery": 7
+  }
+}

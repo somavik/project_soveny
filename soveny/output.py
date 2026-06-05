@@ -41,11 +41,20 @@ def derive_output_dir(selected_image: str, dataset_name: str) -> Path:
     # Létrehozzuk a kívánt formátumot: output/dataset_name/file_name
     return Path('output') / dataset_name / file_name
 
-def save_image(array, output_path) -> sitk.Image:
-    # Numpy array visszaalakítása SimpleITK képpé
+_current_reference = None
+
+def set_reference(image: sitk.Image):
+    """Beállítja az aktuális páciens CT-jét referenciának."""
+    global _current_reference
+    _current_reference = image
+
+def save_image(array, output_path):
+    """Kimenti a képet, automatikusan a globális referenciát használva."""
+    global _current_reference
+    if _current_reference is None:
+        raise ValueError("HIBA: Nincs beállítva referencia kép a mentéshez!")
+        
     new_image = sitk.GetImageFromArray(array)
-    
-    # Mentés
+    new_image.CopyInformation(_current_reference)
     sitk.WriteImage(new_image, output_path)
-    #print(f"Sikeres mentés: {output_path}")
     return new_image

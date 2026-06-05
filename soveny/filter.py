@@ -111,7 +111,7 @@ def calculate_c(image: np.ndarray, sigmas: list) -> float:
         if current_max > global_max_S:
             global_max_S = current_max
 
-    c = global_max_S / 1.5
+    c = global_max_S / 2.0
     c = max(c, 1e-6)
     return c
 
@@ -127,7 +127,7 @@ def evaluate_tubeness_on_skeleton(l1: np.ndarray, l2: np.ndarray, l3: np.ndarray
     scores = (1 - np.exp(-(R_plate**2) / (2 * alpha**2))) * \
              np.exp(-(R_blob**2) / (2 * beta**2)) * \
              (1 - np.exp(-(S**2) / (2 * c**2)))
-    #scores[(l3 > -0.2) | (l2 > -0.1)] = 0 #
+    #scores[(l3 > -0.2) | (l2 > -0.15)] = 0 
             
     return np.nan_to_num(scores)
 

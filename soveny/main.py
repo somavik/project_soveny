@@ -18,10 +18,8 @@ from . import visualization
 from . import septum_BB
 from . import filter
 from . import output
+from . import valve_locator
 
-import glob
-
-import os
 import glob
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -36,14 +34,11 @@ def create_training_dataset(labels_csv_path: str, data_dir: str, output_file: st
     # Ezeket a jellemzőket (oszlopokat) fogjuk használni a tanításhoz
     # A Z, Y, X koordinátákat NE tegyük bele a tanítóadatba, mert a háló ne a térbeli 
     # pozíciót tanulja meg, hanem a CSŐ alakjának változását!
-    feature_cols = ['Tubeness', 'Radius', 'L1', 'L2', 'L3', 'Norm_Z', 'Norm_Y', 'Norm_X']
+    feature_cols = ['Z_index', 'Y_index', 'X_index', 'Tubeness', 'Radius', 'L1', 'L2', 'L3', 'Norm_Z', 'Norm_Y', 'Norm_X']
     
     X_list = []
     y_list = []
     valid_ids = []
-    
-    # Keresünk minden resampled csv fájlt
-    all_csv_files = glob.glob(os.path.join(data_dir, "**", "*resampled*.csv"), recursive=True)
     
     sigma = 5.0 # A Gauss-görbe szélessége 
     indices = np.arange(100) # 0-tól 99-ig
@@ -52,21 +47,29 @@ def create_training_dataset(labels_csv_path: str, data_dir: str, output_file: st
         ct_id = str(row['CT_ID'])
         optimal_idx = int(row['Optimal_Index'])
         
-        # Megpróbáljuk megtalálni a CT_ID-hoz tartozó fájlt
-        # Ez a te pontos elnevezési logikádtól függhet, de pl. a ct_1001_iso_aorta alapján:
-        matching_files = [f for f in all_csv_files if ct_id in f or ct_id.replace("_aorta", "").replace("_artery", "") in f]
+        # --- ÚJ LIDC ÚTVONAL KERESŐ LOGIKA ---
+        # A ct_id formátuma pl.: "LIDC-IDRI-0004_aorta"
+        # Ezt kettébontjuk a mappa nevére és az ér típusára (jobbról az első '_' mentén)
+        if "_" in ct_id:
+            ct_folder = ct_id.rsplit('_', 1)[0]   # -> LIDC-IDRI-0004
+            vessel_name = ct_id.rsplit('_', 1)[1] # -> aorta
+        else:
+            print(f"Hiba: Érvénytelen CT_ID formátum a CSV-ben: {ct_id}")
+            continue
+            
+        # Célmappa: pl. output/lidc/LIDC-IDRI-0004/aorta_cutting_plane
+        target_folder = os.path.join(data_dir, ct_folder, f"{vessel_name}_cutting_plane")
         
-        # Mivel egy mappában lehet aorta és artery is, pontosítunk:
-        if "aorta" in ct_id:
-            matching_files = [f for f in matching_files if "aorta" in f.lower() or "left" in f.lower()]
-        elif "artery" in ct_id:
-            matching_files = [f for f in matching_files if "artery" in f.lower() or "right" in f.lower()]
-
+        # Megkeressük a mappában a resampled csv-t
+        search_pattern = os.path.join(target_folder, "*resampled*.csv")
+        matching_files = glob.glob(search_pattern)
+        
         if not matching_files:
-            print(f"Nem találom a fájlt ehhez: {ct_id}")
+            print(f"Nem találom a fájlt ehhez: {ct_id} (Keresve itt: {search_pattern})")
             continue
             
         file_path = matching_files[0]
+        # -------------------------------------
         
         # 2. Jellemzők (Features) beolvasása
         df_features = pd.read_csv(file_path)
@@ -101,7 +104,17 @@ def create_training_dataset(labels_csv_path: str, data_dir: str, output_file: st
     np.savez(output_file, X=X, y=y, ids=valid_ids)
     print(f"Adatok elmentve: {output_file}")
 
+import os
+import glob
+import argparse
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+
 def run_labeling_pipeline(data_dir: str, source_dir: str, labels_file: str = "master_labels.csv", resume_from: str = None, single_case: str = None):
+
     """
     Végigmegy a megadott könyvtárban található összes resampled CSV fájlon,
     kiplotolja a jellemzőket, és bekéri a felhasználótól az ideális vágási indexet.
@@ -122,7 +135,7 @@ def run_labeling_pipeline(data_dir: str, source_dir: str, labels_file: str = "ma
 
     # 2. Megkeressük az összes CSV fájlt a mappában (és almappáiban)
     # Feltételezzük, hogy a fájlok neve tartalmazza a "resampled" szót
-    search_pattern = os.path.join(data_dir, "**", "*resampled*.csv")
+    search_pattern = os.path.join(data_dir, "**", "aorta_cutting_plane", "*resampled*.csv")
     csv_files = glob.glob(search_pattern, recursive=True)
     
     if not csv_files:
@@ -170,13 +183,12 @@ def run_labeling_pipeline(data_dir: str, source_dir: str, labels_file: str = "ma
 
     # 3. Iterálás a fájlokon
     skip_mode = resume_from is not None
-    from pathlib import Path
     for file_path in sorted(csv_files):
         path_obj = Path(file_path)
-        ct_folder = path_obj.parents[1].name  # pl. ct_1001_iso
+        ct_folder = path_obj.parents[1].name  # pl. LIDC-IDRI-0004
         vessel_folder = path_obj.parents[0].name  # pl. aorta_cutting_plane
         vessel_name = vessel_folder.split('_')[0] # aorta
-        ct_id = f"{ct_folder}_{vessel_name}" # pl. ct_1001_iso_aorta
+        ct_id = f"{ct_folder}_{vessel_name}" # pl. LIDC-IDRI-0004_aorta
         
         if single_case:
             if single_case not in ct_id:
@@ -229,21 +241,33 @@ def run_labeling_pipeline(data_dir: str, source_dir: str, labels_file: str = "ma
                         norm_x = df.at[optimal_idx, 'Norm_X']
                         normal_vec = np.array([norm_z, norm_y, norm_x])
                         
-                        # Megkeressük az eredeti CT és label fájlt a 3D plotoláshoz
-                        img_path = os.path.join(source_dir, ct_folder.replace("_iso", "_image_iso.nii.gz"))
-                        label_path = os.path.join(source_dir, ct_folder.replace("_iso", "_label_iso.nii.gz"))
+                        # --- ÚJ LIDC ELÉRÉSI ÚT LOGIKA ---
+                        
+                        # 1. CT Kép rekurzív megkeresése (mivel változó nevű almappák vannak)
+                        img_search_pattern = os.path.join(source_dir, "ct", ct_folder, "**", f"{ct_folder}.nii.gz")
+                        img_candidates = glob.glob(img_search_pattern, recursive=True)
+                        img_path = img_candidates[0] if img_candidates else ""
+                        
+                        # 2. 604-es szegmentáció direkt bekötése a nnUNet_inference mappából
+                        label_path = os.path.join(source_dir, "nnUNet_inference", ct_folder, "604_STST_large_full", f"{ct_folder}.seg.nrrd")
+                        
+                        # ---------------------------------
                         
                         if os.path.exists(img_path) and os.path.exists(label_path):
                             print("3D vizualizáció betöltése...")
                             plt.close(fig) # Bezárjuk a 2D plotot
-                            _, ct_arr, _, label_arr = input.load_ct_and_label(img_path, label_path)
+                            ct_image, ct_arr, _, label_arr = input.load_ct_and_label(img_path, label_path)
                             dataset_name = os.path.basename(os.path.normpath(data_dir))
                             dataset_cfg = config.load_config(dataset_name)[1]
                             rel_labels = label.extract_labels(label_arr, dataset_cfg)
                             
+                            output.set_reference(ct_image) # Beállítjuk a globális referenciát a mentéshez
+                            
                             # Kiderítjük hogy aorta vagy arteria (mappa útvonalából)
                             tube_t = "aorta" if "aorta" in file_path else "artery"
                             vent_t = "left_ventricle" if tube_t == "aorta" else "right_ventricle"
+                            
+                            save_dir = os.path.join(data_dir, ct_folder, vessel_folder)
                             
                             tube_BB.get_cutting_plane(
                                 normal_vector=normal_vec, 
@@ -252,10 +276,10 @@ def run_labeling_pipeline(data_dir: str, source_dir: str, labels_file: str = "ma
                                 ct_array=ct_arr, 
                                 ventricle_type=vent_t, 
                                 tube_type=tube_t,
-                                save_path_3d=None
+                                save_path_3d=save_dir
                             )
                         else:
-                            print(f"Nem sikerült betölteni a 3D nézethez a CT-t és a címkét: {img_path}")
+                            print(f"Hiba: Nem találtam a fájlokat!\nCT: {img_path}\nCímke: {label_path}")
                             
                     except Exception as e:
                         print(f"Hiba a 3D megjelenítés során: {e}")
@@ -287,10 +311,12 @@ def run_labeling_pipeline(data_dir: str, source_dir: str, labels_file: str = "ma
 
     print("\nGratulálok! Az összes elérhető CT felvétel címkézve lett!")
 
-def process_single_dataset(image_path: str, label_path: str, dataset_name: str, cfg: dict):
+def process_single_dataset(image_path: str, label_path: str, dataset_name: str, cfg: dict, only_tube: bool = False):
     from pathlib import Path
     print(f"\n--- Feldolgozás alatt: {os.path.basename(image_path)} ---")
     ct_image, ct_array, _, label_array = input.load_ct_and_label(image_path, label_path)
+    
+    output.set_reference(ct_image)
     
     output_dir = output.derive_output_dir(image_path, dataset_name)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -311,12 +337,12 @@ def process_single_dataset(image_path: str, label_path: str, dataset_name: str, 
     septum_mask = septum_BB.get_septum_by_distance(
         cropped_relevant_labels_dic['left_ventricle'],
         cropped_relevant_labels_dic['right_ventricle'],
-        max_distance_mm=12
+        max_distance_mm=15
     )
     
-    #visualization.plot_slice_with_labels(cropped_ct_array, {'septum': septum_mask,}, axis='z', save_path=os.path.join(output_dir, 'septum_overlay.png'))
+   #visualization.plot_slice_with_labels(cropped_ct_array, {'septum': septum_mask,}, axis='z', save_path=os.path.join(output_dir, 'septum_overlay.png'))
 
-    _ = tube_BB.get_cutting_features(
+    df_aorta = tube_BB.get_cutting_features(
         ventricle_label=relevant_labels_dic['left_ventricle'],
         tube_label=relevant_labels_dic['aorta'],
         ct_array=ct_array,
@@ -326,7 +352,7 @@ def process_single_dataset(image_path: str, label_path: str, dataset_name: str, 
         ventricle_type='left_ventricle'
     )
     
-    _ = tube_BB.get_cutting_features(
+    df_artery = tube_BB.get_cutting_features(
         ventricle_label=relevant_labels_dic['right_ventricle'],
         tube_label=relevant_labels_dic['artery'],
         ct_array=ct_array,
@@ -336,11 +362,73 @@ def process_single_dataset(image_path: str, label_path: str, dataset_name: str, 
         ventricle_type='right_ventricle'
     )
 
-    print(f"Befejezve: {os.path.basename(image_path)}")
+    print(f"Szálak legenerálva: {os.path.basename(image_path)}")
+    
+    if only_tube:
+        print("--- Tube mód (csak extració): Predikció és sheetness kihagyva. ---")
+        return
+    
+    # --- Predikciók és Vágósíkok Generálása ---
+    p_z_ao, p_y_ao, p_x_ao, norm_vec_ao, _ = valve_locator.predict_cutting_plane_from_features(df_aorta)
+    _, cut_mask_aorta = tube_BB.get_cutting_plane(
+        normal_vector=norm_vec_ao, p_z=p_z_ao, p_y=p_y_ao, p_x=p_x_ao,
+        relevant_labels=relevant_labels_dic,
+        ct_array=ct_array, ventricle_type='left_ventricle', tube_type='aorta',
+        save_path_3d=os.path.join(output_dir, "aorta_cutting_plane")
+    )
+    
+    
+    p_z_ar, p_y_ar, p_x_ar, norm_vec_ar, _ = valve_locator.predict_cutting_plane_from_features(df_artery)
+    _, cut_mask_artery = tube_BB.get_cutting_plane(
+        normal_vector=norm_vec_ar, p_z=p_z_ar, p_y=p_y_ar, p_x=p_x_ar,
+        relevant_labels=relevant_labels_dic,
+        ct_array=ct_array, ventricle_type='right_ventricle', tube_type='artery',
+        save_path_3d=os.path.join(output_dir, "artery_cutting_plane")
+    )
+    
+    # Csak crop-oljuk a kiszámolt vágó maszkokat
+    cropped_cut_mask_aorta = ventircles_BB.get_cropped_array(cut_mask_aorta, roi_mask)
+    cropped_cut_mask_artery = ventircles_BB.get_cropped_array(cut_mask_artery, roi_mask)
+        
+    visualization.plot_slice_with_labels(ct_array, {'aorta_cut': cut_mask_aorta, 'artery_cut': cut_mask_artery}, axis='z', save_path=os.path.join(output_dir, 'cut_masks_overlay.png'))
+        
+    # # Ablakozás (windowing) a CT értékeken, ami a notebook-ban is javítja a sheetness eredményét
+    cropped_ct_windowed = np.clip(cropped_ct_array, -100, 550)
+    
+    visualization.plot_slice_with_labels(cropped_ct_windowed, cropped_relevant_labels_dic, axis='z', save_path=os.path.join(output_dir, 'windowed_ct_overlay.png'))
+        
+    #     # Filter lefuttatása a windowolt CT-n dinamikusan számolt 'c' konstanssal 
+    max_scores = filter.multiscale_sheetness_3d(cropped_ct_array, sigmas=[1.0, 2.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0], alpha=0.25, beta=0.2)
+    visualization.plot_slice_with_labels(max_scores, cropped_relevant_labels_dic, axis='z', save_path=os.path.join(output_dir, 'sheetness_overlay.png'))
+    
+    #     # A levágott végleges tiszta bal kamra (az aortalefolyás nélkül)
+    combined_mask = np.logical_and(np.logical_and(cropped_cut_mask_aorta, cropped_cut_mask_artery), septum_mask)
+    cropped_sheetness = np.where(combined_mask, max_scores, 0)
+        
+    visualization.plot_slice_with_labels(cropped_sheetness, cropped_relevant_labels_dic, axis='z', save_path=os.path.join(output_dir, 'final_sheetness_overlay.png'))
+        
+    # Visszatesszük a kivágott sheetness eredményt a teljes CT méretű tömbbe
+    sheetness_full = np.zeros_like(ct_array, dtype=np.float32)
+    z_idx, y_idx, x_idx = np.nonzero(roi_mask)
+    if len(z_idx) > 0:
+            z_min, z_max = max(0, z_idx.min()), min(ct_array.shape[0], z_idx.max() + 1)
+            y_min, y_max = max(0, y_idx.min()), min(ct_array.shape[1], y_idx.max() + 1)
+            x_min, x_max = max(0, x_idx.min()), min(ct_array.shape[2], x_idx.max() + 1)
+            sheetness_full[z_min:z_max, y_min:y_max, x_min:x_max] = cropped_sheetness
+        
+    output.save_array_as_image(sheetness_full, ct_image, os.path.join(output_dir, 'final_sheetness.nii.gz'))
 
-def process_all_datasets(dataset_name: str, dataset_dir: str, cfg: dict, resume_from: str = None):
-    search_pattern = os.path.join(dataset_dir, "*_image_iso.nii.gz")
-    image_paths = sorted(glob.glob(search_pattern))
+def process_all_datasets(dataset_name: str, dataset_dir: str, cfg: dict, resume_from: str = None, only_tube: bool = False):
+    from pathlib import Path
+
+    if dataset_name == 'lidc':
+        search_pattern = os.path.join(dataset_dir, "ct", "**", "*.nii.gz")
+    else:
+        search_pattern = os.path.join(dataset_dir, "**", "*_image_iso.nii.gz")
+        
+    print(f"Keressük a CT fájlokat itt: {search_pattern}")
+
+    image_paths = sorted(glob.glob(search_pattern, recursive=True))
     
     print(f"Összesen {len(image_paths)} CT fájl található.")
     
@@ -352,13 +440,87 @@ def process_all_datasets(dataset_name: str, dataset_dir: str, cfg: dict, resume_
             else:
                 continue
 
-        label_path = img_path.replace("_image_iso", "_label_iso")
+        if dataset_name == 'lidc':
+            # lidc struktúra: ct_id folder névből (pl. LIDC-IDRI-0004)
+            rel_path = os.path.relpath(img_path, os.path.join(dataset_dir, "ct"))
+            case_id = Path(rel_path).parts[0].replace('\\', '').replace('/', '')
+            base_name = case_id + ".seg.nrrd"
+            label_path = os.path.join(dataset_dir, "nnUNet_inference", case_id, "604_STST_large_full", base_name)
+        else:
+            label_path = img_path.replace("_image_iso", "_label_iso")
+            
         if os.path.exists(label_path):
-            process_single_dataset(img_path, label_path, dataset_name, cfg)
+            process_single_dataset(img_path, label_path, dataset_name, cfg, only_tube=only_tube)
         else:
             print(f"Nem található label fájl: {label_path}")
+        
+def single_tube(image_path: str, label_path: str, dataset_name: str, cfg: dict):
+    ct_image, ct_array, _, label_array = input.load_ct_and_label(image_path, label_path)
+    relevant_labels_dic = label.extract_labels(label_array, cfg)
+    
+    output_dir = output.derive_output_dir(image_path, dataset_name)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {output_dir}")
+    
+    df_aorta = tube_BB.get_cutting_features(
+        ventricle_label=relevant_labels_dic['left_ventricle'],
+        tube_label=relevant_labels_dic['aorta'],
+        ct_array=ct_array,
+        ct_image=ct_image,
+        out_dir=os.path.join(output_dir, "aorta_cutting_plane"),
+        tube_type='aorta',
+        ventricle_type='left_ventricle'
+    )
+    
+    df_artery = tube_BB.get_cutting_features(
+        ventricle_label=relevant_labels_dic['right_ventricle'],
+        tube_label=relevant_labels_dic['artery'],
+        ct_array=ct_array,
+        ct_image=ct_image,
+        out_dir=os.path.join(output_dir, "artery_cutting_plane"),
+        tube_type='artery',
+        ventricle_type='right_ventricle'
+    )
 
-def main(dataset_name: str = 'ImageCHD_dataset'):
+def all_tubes(dataset_name: str, dataset_dir: str, cfg: dict, resume_from: str = None):
+    from pathlib import Path
+
+    if dataset_name == 'lidc':
+        search_pattern = os.path.join(dataset_dir, "ct", "**", "*.nii.gz")
+    else:
+        search_pattern = os.path.join(dataset_dir, "**", "*_image_iso.nii.gz")
+        
+    print(f"Keressük a CT fájlokat itt: {search_pattern}")
+
+    image_paths = sorted(glob.glob(search_pattern, recursive=True))
+    
+    print(f"Összesen {len(image_paths)} CT fájl található.")
+    
+    skip = resume_from is not None
+    for img_path in image_paths:
+        if skip:
+            if resume_from in os.path.basename(img_path):
+                skip = False
+            else:
+                continue
+
+        if dataset_name == 'lidc':
+            # lidc struktúra: ct_id folder névből (pl. LIDC-IDRI-0004)
+            rel_path = os.path.relpath(img_path, os.path.join(dataset_dir, "ct"))
+            case_id = Path(rel_path).parts[0]
+            base_name = os.path.basename(img_path).replace(".nii.gz", ".seg.nrrd")
+            label_path = os.path.join(dataset_dir, "nnUNet_inference", case_id, "604_STST_large_full", base_name)
+        else:
+            label_path = img_path.replace("_image_iso", "_label_iso")
+            
+        if os.path.exists(label_path):
+            single_tube(img_path, label_path, dataset_name, cfg)
+        else:
+            print(f"Nem található label fájl: {label_path}")
+    
+    
+
+def main(dataset_name: str = 'lidc'):
     
     parser = argparse.ArgumentParser(description='Run the Soveny pipeline on a selected image and label.')
     parser.add_argument('--dataset', type=str, default=dataset_name, help=f'Name of the dataset to load (default: {dataset_name})')
@@ -368,31 +530,33 @@ def main(dataset_name: str = 'ImageCHD_dataset'):
     parser.add_argument('--case', type=str, default=None, help='Bizonyos eset (pl. ct_1037) újracímkézése külön')
     parser.add_argument('--labeling', action='store_true', help='Kézi címkéző interfész indítása az output mappán')
     parser.add_argument('--create_dataset', action='store_true', help='Tanító adathalmaz létrehozása a master_labels.csv alapján')
+    parser.add_argument('--predict', action='store_true', help='Predikció végrehajtása a betöltött modellal')
+    parser.add_argument("--tube", action='store_true', help="Csak a cső lokalizációs és feature-extrakciós rész lefuttatása")
     args = parser.parse_args()
 
     if args.create_dataset:
         output_dir = os.path.join("output", args.dataset)
         print(f"Tanító adathalmaz létrehozása ebből a mappából: {output_dir}")
-        create_training_dataset(labels_csv_path="master_labels.csv", data_dir=output_dir, output_file="training_data.npz")
+        create_training_dataset(labels_csv_path="master_labels_lv_aorta.csv", data_dir=output_dir, output_file="training_data_lv_aorta.npz")
         return
 
     if args.labeling:
         dataset_dir, cfg = config.load_config(args.dataset)
-        source_dir = os.path.join(dataset_dir, "preprocessed")
         output_dir = os.path.join("output", args.dataset)
         print(f"Címkéző pipeline indítása: {output_dir}")
-        run_labeling_pipeline(data_dir=output_dir, source_dir=source_dir, labels_file="master_labels.csv", resume_from=args.resume, single_case=args.case)
+        run_labeling_pipeline(data_dir=output_dir, source_dir=dataset_dir, labels_file="master_labels_lv_aorta.csv", resume_from=args.resume, single_case=args.case)
         return
 
     dataset_dir, cfg = config.load_config(args.dataset)
-    dataset_dir = os.path.join(dataset_dir, "preprocessed")  # Resampled könyvtár használata most az ImageCHD_dataset-ben, ahol már izotrópra van resample-elve a CT és a label is.
+    #dataset_dir = os.path.join(dataset_dir, "preprocessed")  # Resampled könyvtár használata most az ImageCHD_dataset-ben, ahol már izotrópra van resample-elve a CT és a label is.
     
     if args.single:
         image_path, label_path = input.get_input_paths(dataset_dir)
-        process_single_dataset(image_path, label_path, args.dataset, cfg)
+        process_single_dataset(image_path, label_path, args.dataset, cfg, only_tube=args.tube)
+        
     else:
         # A kérésnek megfelelően ráengedjük az összesre a meghívást:
-        process_all_datasets(args.dataset, dataset_dir, cfg, args.resume)
+        process_all_datasets(args.dataset, dataset_dir, cfg, args.resume, only_tube=args.tube)
     
     
 if __name__ == '__main__':

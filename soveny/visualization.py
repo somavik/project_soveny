@@ -118,6 +118,12 @@ def plot_slice_with_labels(ct_array: np.ndarray, labels: Union[np.ndarray, Dict[
         plt.close(fig)
 
 
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import matplotlib.colors as mcolors
+import numpy as np
+from typing import Optional, Tuple, Union, Dict
+
 def plot_3d_slices_with_labels(ct_array: np.ndarray, labels: Union[np.ndarray, Dict[str, np.ndarray]], slice_indices: Optional[Tuple[int, int, int]] = None, show: bool = True, save_path: Optional[str] = None):
     """
     Plots the sagittal (x), coronal (y), and axial (z) slices of the CT array alongside a colorized label overlay.
@@ -145,10 +151,24 @@ def plot_3d_slices_with_labels(ct_array: np.ndarray, labels: Union[np.ndarray, D
     else:
         label_array = labels
 
+    # 1. Sagittal (X metszet): A fej (Z) fent, a mellkas (Y - Anterior) jobbra. 
+    # A RAS orientáció és az origin='lower' ezt alapból megadja a numpy-ban, nincs szükség forgatásra.
+    sag_ct = np.fliplr(ct_array[:, :, x_idx])
+    sag_label = np.fliplr(label_array[:, :, x_idx])
+
+    # 2. Coronal (Y metszet): A fej (Z) fent, DE a beteg jobb oldala (X) a képernyő BAL oldalán.
+    # Vízszintes tükrözés (fliplr) szükséges.
+    cor_ct = np.fliplr(ct_array[:, y_idx, :])
+    cor_label = np.fliplr(label_array[:, y_idx, :])
+
+
+    ax_ct = np.fliplr(ct_array[z_idx, :, :])
+    ax_label = np.fliplr(label_array[z_idx, :, :])
+
     slices = [
-        ('X (Sagittal)', x_idx, ct_array[:, :, x_idx], label_array[:, :, x_idx]),
-        ('Y (Coronal)', y_idx, ct_array[:, y_idx, :], label_array[:, y_idx, :]),
-        ('Z (Axial)', z_idx, ct_array[z_idx, :, :], label_array[z_idx, :, :])
+        ('X (Sagittal)', x_idx, sag_ct, sag_label),
+        ('Y (Coronal)', y_idx, cor_ct, cor_label),
+        ('Z (Axial)', z_idx, ax_ct, ax_label)
     ]
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
@@ -189,5 +209,3 @@ def plot_3d_slices_with_labels(ct_array: np.ndarray, labels: Union[np.ndarray, D
         plt.show()
     else:
         plt.close(fig)
-
-

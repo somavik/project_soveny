@@ -22,7 +22,7 @@ def get_dilated_intersection(mask1: np.ndarray, mask2: np.ndarray, lin_heart_siz
     return septum_bounding_region
 
 
-def get_septum_by_distance(mask1: np.ndarray, mask2: np.ndarray, max_distance_mm: int = 11) -> np.ndarray:
+def get_septum_by_distance(mask1: np.ndarray, mask2: np.ndarray, max_distance_mm: float = 11.0) -> np.ndarray:
     """
     Távolságtérképek alapján keresi meg a sövényt. 
     max_distance_mm: Milyen messze lehet egy pixel a kamra falától, hogy még septumként kezeljük?

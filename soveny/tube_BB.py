@@ -1,4 +1,5 @@
 import os
+from networkx import radius
 import numpy as np
 import pandas as pd
 import scipy.ndimage as ndimage
@@ -14,73 +15,89 @@ from soveny import filter
 from soveny import output
 from soveny import visualization
 
-def get_shortest_path_between_farest_points(skeleton : np.ndarray) -> np.ndarray:
-    z,y,x = np.nonzero(skeleton)
-    skeleton_neighbors = {}
+import numpy as np
+from scipy.spatial import KDTree
+from scipy.spatial.distance import pdist, squareform
+from scipy.interpolate import splprep, splev
+import networkx as nx
 
-    for i in range(len(z)):
-        z_coord, y_coord, x_coord = z[i], y[i], x[i]
-        neighbors = []
+def get_shortest_path_between_farest_points(skeleton: np.ndarray, smooth_factor: float = 10.0) -> np.ndarray:
+    """
+    Megkeresi a csontváz (skeleton) két legtávolabbi pontját, 
+    kiszámolja a valódi fizikai legrövidebb utat (Dijkstra), 
+    majd egy B-spline algoritmussal kisimítja azt.
+    """
+    # 1. Koordináták kinyerése a 3D tömbből (N x 3 mátrix)
+    coords = np.argwhere(skeleton)
+    if len(coords) < 2:
+        return coords
+
+    # 2. Legtávolabbi pontok gyors keresése (C-optimalizált pdist)
+    # Sokkal gyorsabb, mint a dupla Python for ciklus.
+    dist_matrix = squareform(pdist(coords))
+    start_idx, end_idx = np.unravel_index(np.argmax(dist_matrix), dist_matrix.shape)
+    
+    start_point = tuple(coords[start_idx])
+    end_point = tuple(coords[end_idx])
+
+    # 3. Szomszédok keresése KDTree-vel (Villámgyors 26-szomszédság)
+    # A sqrt(3) ~ 1.732 a maximális távolság egy 3x3x3-as rácson (átló)
+    # 1.8 sugár pont lefedi az összes 26-os szomszédot
+    tree = KDTree(coords)
+    pairs = tree.query_pairs(r=1.8)
+
+    # 4. Gráf építése és Dijkstra algoritmus (Valós súlyozott élekkel)
+    G = nx.Graph()
+    for coord in coords:
+        G.add_node(tuple(coord))
+
+    for i, j in pairs:
+        p1 = tuple(coords[i])
+        p2 = tuple(coords[j])
+        # Fizikai Euklideszi távolság kiszámítása az él súlyához (1.0, 1.41, 1.73)
+        dist = np.linalg.norm(np.array(p1) - np.array(p2))
+        G.add_edge(p1, p2, weight=dist)
+
+    try:
+        # networkx Dijkstra implementációja a legrövidebb útra
+        path = nx.shortest_path(G, source=start_point, target=end_point, weight='weight')
+    except nx.NetworkXNoPath:
+        print("Figyelem: A skeleton nem összefüggő! Visszatérés egyenes vonallal.")
+        return np.array([start_point, end_point])
+
+    path_array = np.array(path)
+
+    # Biztosítjuk a megfelelő irányt (Z koordináta növekvő/csökkenő)
+    if path_array[0][0] > path_array[-1][0]:
+        path_array = path_array[::-1]
+
+    # 5. Útvonal simítása (B-spline vasalás)
+    # Csak akkor simítunk, ha elég hosszú a vonal (köbös spline-hoz min 4 pont kell)
+    if len(path_array) > 4:
+        # Szétválasztjuk Z, Y, X tengelyekre
+        z, y, x = path_array[:, 0], path_array[:, 1], path_array[:, 2]
         
-        for j in range(len(z)):
-            if i == j:
-                continue
-            z_neighbor, y_neighbor, x_neighbor = z[j], y[j], x[j]
-            dx = abs(x_neighbor - x_coord)
-            dy = abs(y_neighbor - y_coord)
-            dz = abs(z_neighbor - z_coord)
-            if dx <= 1 and dy <= 1 and dz <= 1:
-                neighbors.append((z_neighbor, y_neighbor, x_neighbor))
-
-        skeleton_neighbors[(z_coord, y_coord, x_coord)] = neighbors
-
-    farest_points = ()
-    longest_distance = 0.0
-    longest_distance_idx = (0, 0)
-
-    for i in range(len(z)):
-        for j in range(i + 1, len(z)):
-            point1 = (z[i], y[i], x[i])
-            point2 = (z[j], y[j], x[j])
-            distance = np.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2 + (point1[2] - point2[2]) ** 2)
+        try:
+            # splprep: B-spline görbe illesztése. 
+            # A 'smooth_factor' (s paraméter) szabályozza, mennyire kövesse a nyers pontokat.
+            # Minél nagyobb az s, annál egyenesebb/simább a görbe. s=0 esetén minden ponton átmegy.
+            tck, u = splprep([z, y, x], s=smooth_factor, k=3)
             
-            if distance > longest_distance:
-                longest_distance = distance
-                longest_distance_idx = (i, j)
-
-    farest_points = (longest_distance, (z[longest_distance_idx[0]], y[longest_distance_idx[0]], x[longest_distance_idx[0]]), (z[longest_distance_idx[1]], y[longest_distance_idx[1]], x[longest_distance_idx[1]]))
-
-    shortest_path = find_shortest_path(farest_points[1], farest_points[2], skeleton_neighbors)
-    
-    # biztosítjuk, hogy kamra alja -> cső fele
-    if shortest_path[0][0] > shortest_path[-1][0]:
-        shortest_path = shortest_path[::-1]
-        
-    return shortest_path
-
-def find_shortest_path(start_point : tuple, end_point : tuple, skeleton_neighbors : dict) -> np.ndarray:
-    from collections import deque
-    visited = set()
-    queue = deque([(start_point, [start_point])])  # (current_point, path_to_current)
-    
-    while queue:
-        current_point, path = queue.popleft()
-        
-        if current_point == end_point:
-            length = len(path)
+            # Újrageneráljuk a pontokat a görbe mentén (ugyanannyi pontot, mint eredetileg)
+            u_new = np.linspace(0, 1, len(path_array))
+            z_smooth, y_smooth, x_smooth = splev(u_new, tck)
             
-            return np.array(path)
-        
-        if current_point in visited:
-            continue
-        
-        visited.add(current_point)
-        
-        for neighbor in skeleton_neighbors.get(current_point, []):
-            if neighbor not in visited:
-                queue.append((neighbor, path + [neighbor]))
-    
-    return np.array([])  # Nincs út a két pont között
+            # Összerakjuk a simított mátrixot
+            smoothed_path = np.vstack((z_smooth, y_smooth, x_smooth)).T
+            
+            # Mivel a Spline lebegőpontos (float) koordinátákat ad, vissza kell kerekítenünk 
+            # integer indexekké, hogy a mátrixos indexelés (pl. path_mask[tuple(...)]) működjön.
+            path_array = np.round(smoothed_path).astype(int)
+            
+        except Exception as e:
+            print(f"Figyelem: A spline simítás nem sikerült ({e}), nyers útvonalat adunk vissza.")
+
+    return path_array
 
 
 def get_cutting_indices(sorted_indices, scores_on_skel, eigenvectors_on_skel, sz_orig, sy_orig, sx_orig, z_min: int = 0, y_min: int = 0, x_min: int = 0, threshold_og: float = 0.9) -> tuple[tuple[int, int, int], np.ndarray]:
@@ -169,19 +186,25 @@ def resample_dataframe(original_df: pd.DataFrame) -> pd.DataFrame:
 
     return df_resampled
 
-def get_smoothed_ventricle(ventricle_label: np.ndarray):
-    iterations = 5
+def get_smoothed_ventricle(ventricle_label: np.ndarray, output_dir: str = None) -> np.ndarray:
+    iterations = 2
     
     smoothed_ventricle = ndimage.binary_dilation(ventricle_label, iterations=iterations)
     smoothed_ventricle = ndimage.binary_erosion(smoothed_ventricle, iterations=iterations)
     
+    smoothed_ventricle = ventricle_label
+    
+    if output_dir:
+        output.save_image(smoothed_ventricle.astype(np.uint8), os.path.join(output_dir, "smoothed_ventricle.nii.gz"))
     return smoothed_ventricle
 
 def get_smoothed_tube(tube_label: np.ndarray, output_dir: str = None):
-    iterations = 5
+    iterations = 2
     
     smoothed_tube = ndimage.binary_erosion(tube_label, iterations=iterations)
     smoothed_tube = ndimage.binary_dilation(smoothed_tube, iterations=iterations)
+    
+    smoothed_tube = tube_label
     
     if smoothed_tube.sum() == 0:
         print("Figyelmeztetés: A cső maszk teljesen eltűnt a simítás során! Visszaadom az eredetit.")
@@ -192,7 +215,7 @@ def get_smoothed_tube(tube_label: np.ndarray, output_dir: str = None):
     return smoothed_tube
 
 
-def get_smoothed_unio(scale: float, smoothed_ventricle: np.ndarray, dist_to_ventricle: np.ndarray, extended_tube: np.ndarray) -> np.ndarray:
+def get_smoothed_unio(scale: float, smoothed_ventricle: np.ndarray, dist_to_ventricle: np.ndarray, extended_tube: np.ndarray, output_dir: str = None) -> np.ndarray:
     distance = 1 * scale
     
     print(f"Skála: {scale}, Távolság a kamrához és csőhöz: {distance}")
@@ -202,58 +225,12 @@ def get_smoothed_unio(scale: float, smoothed_ventricle: np.ndarray, dist_to_vent
     
     unio = smoothed_ventricle | tubular_tube
     
-    smoothed = ndimage.binary_dilation(unio, iterations=2)
-    smoothed = ndimage.binary_erosion(smoothed, iterations=2)
-    
-    return smoothed.astype(np.uint8)
-
-def get_extended_tube(smoothed_tube: np.ndarray, smoothed_ventricle: np.ndarray, dist_to_ventricle: np.ndarray, output_dir: str = None) -> np.ndarray:        
-    tube_mask = smoothed_tube.astype(bool)
-    ventricle_mask = smoothed_ventricle.astype(bool)
-    
-    # Biztonsági ellenőrzés
-    if not np.any(tube_mask) or not np.any(ventricle_mask):
-        return smoothed_tube.astype(np.uint8)
-
-    min_gap = np.min(dist_to_ventricle[tube_mask])
-    print(f"Minimum távolság a kamrához a cső mentén: {min_gap} voxel")
-
-    if min_gap <= 1:
-        return smoothed_tube.astype(np.uint8)
-
-    # 1. PONT: A cső legvégének (Seed) koordinátája
-    # Vesszük azokat a pontokat a csövön, amik a legközelebb vannak a kamrához
-    masked_dist_ventricle = np.where(tube_mask, dist_to_ventricle, np.inf)
-    seed_coords = np.unravel_index(np.argmin(masked_dist_ventricle), masked_dist_ventricle.shape)
-
-    # 2. PONT: A kamra falának legközelebbi pontja (Target) koordinátája
-    # Kiszámoljuk a távolságot ettől az egyetlen magtól, és megkeressük a legkisebbet a kamrán belül
-    seed_mask = np.zeros_like(tube_mask)
-    seed_mask[seed_coords] = True
-    dist_from_seed = distance_transform_edt(~seed_mask)
-    
-    masked_dist_seed = np.where(ventricle_mask, dist_from_seed, np.inf)
-    target_coords = np.unravel_index(np.argmin(masked_dist_seed), masked_dist_seed.shape)
-
-    # 3. NYÍLEGYENES VONAL húzása a két 3D pont közé
-    line_indices = line_nd(seed_coords, target_coords)
-    bridge_mask = np.zeros_like(tube_mask)
-    bridge_mask[line_indices] = True
-
-    # 4. VONAL VASTAGÍTÁSA (Henger formálása)
-    # Az iterációk száma adja meg a híd vastagságát. A 2 tökéletes, esztétikus csövet ad.
-    thickness_iterations = 8
-    bridge_mask = binary_dilation(bridge_mask, iterations=thickness_iterations)
-
-    # 5. Ragasztó hozzáadása a csőhöz
-    extended_tube = smoothed_tube | bridge_mask
+    smoothed = ndimage.binary_dilation(unio, iterations=6)
+    smoothed = ndimage.binary_erosion(smoothed, iterations=6)
     
     if output_dir:
-        import os # Ha még nincs importálva a függvényen belül
-        from soveny import output # Ahogy a te kódodban is van
-        output.save_image(extended_tube.astype(np.uint8), os.path.join(output_dir, "extended_tube.nii.gz"))
-
-    return extended_tube.astype(np.uint8)
+        output.save_image(smoothed.astype(np.uint8), os.path.join(output_dir, "smoothed_unio.nii.gz"))
+    return smoothed.astype(np.uint8)
 
 def get_cutting_features(ventricle_label: np.ndarray, tube_label: np.ndarray, ct_array: np.ndarray = None, ct_image: sitk.Image = None, out_dir: str = None, ventricle_type: str = None, tube_type: str = None) -> pd.DataFrame:
     """
@@ -270,19 +247,17 @@ def get_cutting_features(ventricle_label: np.ndarray, tube_label: np.ndarray, ct
     Returns:
         df.DataFrame: A vágási jellemzőket tartalmazó DataFrame.
     """ 
+    
     os.makedirs(out_dir, exist_ok=True)
-    scale = 0.5
+    scale = 5.0
 
-    smoothed_ventricle = get_smoothed_ventricle(ventricle_label)
+    smoothed_ventricle = get_smoothed_ventricle(ventricle_label, output_dir=out_dir)
     dist_to_ventricle = distance_transform_edt(~smoothed_ventricle)
     
     smoothed_tube = get_smoothed_tube(tube_label, output_dir=out_dir)
-        
-    dist_to_tube = distance_transform_edt(~smoothed_tube)
-    extended_tube = get_extended_tube(smoothed_tube, smoothed_ventricle, dist_to_ventricle, output_dir=out_dir)    
     while True:
 
-        smoothed = get_smoothed_unio(scale=scale, smoothed_ventricle=smoothed_ventricle, dist_to_ventricle=dist_to_ventricle, extended_tube=extended_tube)
+        smoothed = get_smoothed_unio(scale=scale, smoothed_ventricle=smoothed_ventricle, dist_to_ventricle=dist_to_ventricle, extended_tube=smoothed_tube)
         skeleton = skeletonize(smoothed)
         
         # Szigetek keresése 26-os szomszédsággal
@@ -301,7 +276,7 @@ def get_cutting_features(ventricle_label: np.ndarray, tube_label: np.ndarray, ct
             if len(main_path) > 0:
                 main_path_mask[tuple(main_path.T)] = 1            
             # a main path nem csak a kamrában, de a csőben is megy, akkor az jó
-            if tube_label[main_path_mask.astype(bool)].sum() > 3:
+            if tube_label[main_path_mask.astype(bool)].sum() > 1:
                 dilated_skeleton = ndimage.binary_dilation(main_skeleton, iterations=1)
                 output.save_image(dilated_skeleton.astype(np.uint8), os.path.join(out_dir, "dilated_main_skeleton.nii.gz"))
                 output.save_image(smoothed.astype(np.uint8), os.path.join(out_dir, "smoothed.nii.gz"))
@@ -309,13 +284,21 @@ def get_cutting_features(ventricle_label: np.ndarray, tube_label: np.ndarray, ct
                 output.save_image(dilated_main_path.astype(np.uint8), os.path.join(out_dir, "dilated_main_path.nii.gz"))
                 break
             else:
-                scale += 2.5
+                scale += 0.5
         else:
-            scale += 3.0
+            scale += 1.0
             
     # Region of Interest meghatározása az átmenet kereséséhez, a fő vonal felső 10%-a
-    cut_len = int(len(main_path) * 0.1) 
-    bottleneck_path = main_path[:cut_len]
+    cut_len = int(len(main_path) * 0.85) 
+    bottleneck_path = main_path[cut_len:]
+    
+    # ellenörzésképpen mentjük a fő vonalat és a bottleneck régiót is
+    bottleneck_mask = np.zeros_like(main_path_mask, dtype=np.uint8)
+    if len(bottleneck_path) > 0:
+        bottleneck_mask[tuple(bottleneck_path.T)] = 1
+    # dilatáljuk egy kicsit, hogy jobban látszódjon a vizualizációkon
+    bottleneck_mask = ndimage.binary_dilation(bottleneck_mask, iterations=1)
+    output.save_image(bottleneck_mask.astype(np.uint8), os.path.join(out_dir, "bottleneck_mask.nii.gz"))
 
     distance_map = distance_transform_edt(smoothed.astype(bool))
     if len(bottleneck_path) > 0:
@@ -326,11 +309,15 @@ def get_cutting_features(ventricle_label: np.ndarray, tube_label: np.ndarray, ct
     if len(radii_in_voxels) > 0:
         min_r = np.min(radii_in_voxels)
         max_r = np.max(radii_in_voxels)
+        mean_r = np.mean(radii_in_voxels)
+        median_r = np.median(radii_in_voxels)
         # Dinamikus sigmák
-        dynamic_sigmas = np.linspace(min(min_r, 1.0), max(max_r, 5.0), num=10).tolist()
+        dynamic_sigmas = np.linspace(max(min_r, 2.0), max(max_r, 7.0), num=5).tolist()
+        #dynamic_sigmas = np.linspace(mean_r, median_r, num=10).tolist()
+        print(f"Dinamikus sigmák: {dynamic_sigmas}")
     else:
         # Ha egyáltalán nincs érték, adjunk egy biztonságos fallback listát!
-        dynamic_sigmas = [1.0, 2.0, 3.0,  4.0, 5.0, 6.0]
+        dynamic_sigmas = [2.0, 3.0,  4.0, 5.0, 6.0, 7.0]
 
     z_idx, y_idx, x_idx = np.nonzero(smoothed)
 
@@ -349,8 +336,8 @@ def get_cutting_features(ventricle_label: np.ndarray, tube_label: np.ndarray, ct
     smoothed_cropped = smoothed[z_min:z_max, y_min:y_max, x_min:x_max]
     
     # A fő vonal alsó 20%-át levágjuk, hogy ez ne zavarjon
-    cut_len = int(len(main_path) * 0.2) 
-    interesting_path = main_path[cut_len:]
+    #cut_len = int(len(main_path) * 0.2) 
+    interesting_path = main_path # proba
     
     # EREDETI MÉRETŰ maszkot készítünk, beleírjuk az 1-eseket
     interesting_mask_full = np.zeros_like(main_path_mask, dtype=np.uint8)
@@ -364,8 +351,8 @@ def get_cutting_features(ventricle_label: np.ndarray, tube_label: np.ndarray, ct
             image=smoothed_cropped.astype(np.float32), 
             sigmas=dynamic_sigmas,
             skeleton=interesting_mask_cropped, 
-            alpha=0.25, # annyira nem fontos, hogy a cső két kersztmetszete hasonló legyen 
-            beta=1.0
+            alpha=0.2, # annyira nem fontos, hogy a cső két kersztmetszete hasonló legyen 
+            beta=0.6
         )
     
    
@@ -423,14 +410,47 @@ def get_cutting_features(ventricle_label: np.ndarray, tube_label: np.ndarray, ct
     
     df_resampled = resample_dataframe(df_features)
     
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-        csv_path = os.path.join(out_dir, "skeleton_features_resampled.csv")
-        df_resampled.to_csv(csv_path, index=False)
+    csv_path = os.path.join(out_dir, "skeleton_features_resampled.csv")
+    df_resampled.to_csv(csv_path, index=False)
+    
+    print(df_resampled)
+    
+    # --- Új Plot: y tengelyen a Z koordináták, x tengelyen az Y koordináták ---
+    plt.figure(figsize=(10, 6))
+    
+    # Adatok kinyerése (itt a resampled DataFrame-t használjuk, hogy egyezzen a kimenettel)
+    y_coords = df_resampled['Y_index']
+    z_coords = df_resampled['Z_index']
+    tubeness_scores = df_resampled['Tubeness']
+    
+    # Vonal kirajzolása halványan a pontok mögé, hogy látszódjon a pálya folytonossága
+    plt.plot(y_coords, z_coords, color='gray', linestyle='--', alpha=0.5, zorder=1)
+    
+    # Scatter plot a heatmap szerű megjelenítéshez
+    # A cmap='magma' vagy 'turbo' nagyon jól mutat orvosi képek analízisénél
+    scatter = plt.scatter(y_coords, z_coords, c=tubeness_scores, cmap='magma', 
+                          s=60, edgecolor='black', zorder=2)
+    
+    # Színmagyarázat (colorbar) hozzáadása
+    cbar = plt.colorbar(scatter)
+    cbar.set_label('Csőszerűségi érték (Tubeness)')
+    
+    plt.title('Fővonal Y-Z síkon csőszerűség alapján színezve')
+    plt.xlabel('Y koordináta')
+    plt.ylabel('Z koordináta')
+    plt.grid(True)
+    
+    # Új fájlnév, hogy ne írja felül az előzőt
+    plt.savefig(os.path.join(out_dir, "tubeness_yz_heatmap.png"))
+    plt.close() # Memóriaszivárgás elkerülése miatt érdemes lezárni a plotot
+    
 
     return df_resampled
 
 def get_cutting_plane(normal_vector, p_z, p_y, p_x, relevant_labels, ct_array, ventricle_type, tube_type, save_path_3d) -> tuple[np.ndarray, np.ndarray]:
+    if not os.path.exists(save_path_3d):
+        os.makedirs(save_path_3d)
+    
     # --- SÍK GENERÁLÁSA ---
     n_z, n_y, n_x = normal_vector[0], normal_vector[1], normal_vector[2]
 
@@ -464,5 +484,6 @@ def get_cutting_plane(normal_vector, p_z, p_y, p_x, relevant_labels, ct_array, v
         slice_indices=(p_z_int, p_y_int, p_x_int),
         save_path=save_path_3d
     )
+    output.save_image(visual_plane_mask.astype(np.uint8), os.path.join(save_path_3d, "cutting_plane_visual.nii.gz"))
 
     return visual_plane_mask, half_space_mask
