@@ -127,7 +127,7 @@ def evaluate_tubeness_on_skeleton(l1: np.ndarray, l2: np.ndarray, l3: np.ndarray
     scores = (1 - np.exp(-(R_plate**2) / (2 * alpha**2))) * \
              np.exp(-(R_blob**2) / (2 * beta**2)) * \
              (1 - np.exp(-(S**2) / (2 * c**2)))
-    #scores[(l3 > -0.2) | (l2 > -0.15)] = 0 
+    scores[(l3 > 0.0) | (l2 > 0.0)] = 0 
             
     return np.nan_to_num(scores)
 
